@@ -5,27 +5,24 @@ capture log close
 
 *定义一些全局宏，便于后续调用源文件
 
-global root="C:\Users\Yangzhihua\Nutstore\1\FriendsSpace\一平\信息化建设、家庭教育与城乡儿童发展"
+* global root="C:\Users\Yangzhihua\Nutstore\1\FriendsSpace\一平\信息化建设、家庭教育与城乡儿童发展"
+global root = "/Users/liusongyue/Library/CloudStorage/坚果云-201921030023@mail.bnu.edu.cn/1_StudySpace/一平/信息化建设、家庭教育与城乡儿童发展"
+
 global rawdata="$root/RawData"
 global wkdata="$root/WorkingData"
 global temp="$root/TempData"
-global analysis="$root/Analysis"
-global dofiles="$analysis/DoFiles" 
+
+global codes = "$root/Codes-EduGovProc-StudentOutcome"
 global logs="$root/LogFiles"
 global tables = "$root/Tables"
 global figures = "$root/Figures"
 global results = "$root/Results"
 
 
-* 政府采购数据
-global GovProcEduITDta = "$temp/GovProc_Cleaned.dta"
-
-*【【【 区县教育信息化采购数据，后续整理
-global EduITProcDta = "$root/WorkingData/EduITGovProc_byCounty.dta"   
+  
 
 *【【【CFPS家庭微观调查数据，后续整理
-global indivVarDta = "$root/TempData/CFPS_IndivLevel_1214161820.dta"
-global CFPS = "C:\Users\Yangzhihua\Nutstore\1\FriendsSpace\一平\信息化建设、家庭教育与城乡儿童发展\RawData"
+global CFPS = "$rawdata/CFPS/RawData"
 global cfps2010adult = "$CFPS/cfps2010adult_202008.dta"
 global cfps2010child = "$CFPS/cfps2010child_201906.dta"
 global cfps2010comm = "$CFPS/cfps2010comm_201906.dta"

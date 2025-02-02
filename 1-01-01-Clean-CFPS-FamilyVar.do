@@ -167,4 +167,4 @@ replace fid = fid16 if wave == 2016
 replace fid = fid18 if wave == 2018
 replace fid = fid20 if wave == 2020
 
-save "$temp/FamilyVar_2012-2020.dta", replace
+save "$wkdata/FamilyVar_2012-2020.dta", replace
