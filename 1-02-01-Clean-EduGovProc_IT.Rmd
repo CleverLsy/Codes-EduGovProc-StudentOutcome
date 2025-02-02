@@ -162,7 +162,9 @@ webshot(temp_path, file = png_path, delay = 2, zoom = 3)
 
 ```{r}
 # 加载必要的库
+library(haven)
 library(dplyr)
+library(tidyr)
 
 # **Step 1: 检查缺失值**
 # 检查 "采购人省份", "采购人城市", "采购人区县", "采购人adcode" 的缺失值
@@ -176,15 +178,42 @@ missing_values <- EduGovProc_IT %>%
 print(missing_values)  # 显示缺失值情况
 
 
-# **Step 2: 过滤掉缺失值**
-# 过滤掉 "采购人省份", "采购人城市", "采购人区县", "采购人adcode" 为空的行
- filtered_data <- EduGovProc_IT %>%
-   filter(!is.na(采购人省份) & !is.na(采购人城市) & !is.na(采购人区县) & !is.na(采购人adcode))
+# **Step 2:补充"采购人adcode" 为空的值**
+countyfile_path<- file.path(root_path, "RawData", "城市县域变量", "1999~2022年县市社会经济指标.dta")
+countyVar <- read_dta(countyfile_path)
 
-# 按区县（唯一标识：省份+城市+区县+adcode）加总 `合同金额万元_T595`
+# 只保留省、市、县、县代码等中文变量
+county_namecodeMap <- countyVar %>%
+  rename(
+    采购人省份 = 省,
+    采购人城市 = 市,
+    采购人区县 = 县,
+    采购人县代码 = 县代码
+  )  %>%
+  select(采购人省份, 采购人城市, 采购人区县, 采购人县代码) %>%
+  filter(!is.na(采购人县代码))   %>%
+  distinct()  # 去除重复样本
+
+ EduGovProc_IT <-  EduGovProc_IT  %>%
+  left_join(county_namecodeMap, by=c("采购人省份", "采购人城市", "采购人区县"))
+# 替换 '采购人县代码' 为 'adcode' 当其为 NA 时
+ EduGovProc_IT   <- EduGovProc_IT   %>%
+  mutate(采购人adcode = if_else(is.na(采购人adcode), 采购人县代码, 采购人adcode))
+
+filtered_data <- EduGovProc_IT  %>%
+  filter(!is.na(采购人adcode))
+
+delete <- EduGovProc_IT  %>%
+  filter(is.na(采购人adcode)) %>%
+  select(采购人省份, 采购人城市, 采购人区县, 采购人县代码, 年份) %>%
+  distinct()  # 去除重复样本
+table(delete$年份)
+
 # **Step 3: 计算区县层面合同金额和合同数量**
+# 按区县（唯一标识：省份+城市+区县+adcode）加总 `合同金额万元_T595`
+CountyEduGovProc_IT_raw <- EduGovProc_IT 
 CountyEduGovProc_IT <- filtered_data %>%
-  group_by(采购人省份, 采购人城市, 采购人区县, 年份) %>%
+  group_by(采购人省份, 采购人城市, 采购人区县, 采购人adcode, 年份) %>%
   summarise(
     # **1. 教育信息化采购（全部金额/合同数）**
     TotalEduITContract_Million = sum(合同金额万元_T595, na.rm = TRUE) / 100,
@@ -239,11 +268,11 @@ library(dplyr)
 library(tidyr)
 
 
-prefecturefile_path <- file.path(root_path, "RawData", "城市县域变量", "1999~2022年县市社会经济指标.dta")
+prefecturefile_path <- file.path(root_path, "RawData", "城市县域变量", "1998～2022年中国城市统计年鉴地级市面板数据.dta")
 
-countycityfile_path <- file.path(root_path, "RawData", "城市县域特征", "1999～2022年中国城市统计年鉴县级市面板数据.dta")
+countycityfile_path <- file.path(root_path, "RawData", "城市县域变量", "1999～2022年中国城市统计年鉴县级市面板数据.dta")
 
-countyfile_path<- file.path(root_path, "RawData", "城市县域特征", "1999～2022年中国城市统计年鉴县级市面板数据.dta")
+countyfile_path<- file.path(root_path, "RawData", "城市县域变量", "1999~2022年县市社会经济指标.dta")
 
 
 prefecture_cityVar <- read_dta(prefecturefile_path)
@@ -261,7 +290,7 @@ countyVar <- countyVar %>%
     采购人区县 = cnty_县,     # 县
     采购人省代码 = cnty_省代码,
     采购人市代码 = cnty_市代码,
-    采购人县代码 = cnty_县代码
+    采购人adcode = cnty_县代码
   )
 
 prefecture_cityVar <-prefecture_cityVar %>%
@@ -283,34 +312,42 @@ county_cityVar <- county_cityVar  %>%
     采购人区县 = cnty_县,     # 县
     采购人省代码 = cnty_省代码,
     采购人市代码 = cnty_市代码,
-    采购人县代码 = cnty_县代码
+    采购人adcode = cnty_县代码
   )
 
 # 合并数据框：Step 1
 intersect(colnames(CountyEduGovProc_IT ), colnames(countyVar))
 
-df <- CountyEduGovProc_IT %>%
-  left_join(countyVar, by = c("采购人省份" , "采购人城市","采购人区县","年份" ))
+df1 <- CountyEduGovProc_IT %>%
+  left_join(countyVar, by = c("采购人省份" , "采购人城市","采购人区县","采购人adcode","年份" ))  
 
-# 查看合并后的数据
-head(CountyEduGovProc_IT)
+
+
+
+
+```
+
+```{r}
+
 
 # 合并数据框：Step 2
-intersect(colnames(df), colnames(prefecture_cityVar))
-df1  <- df  %>%
+intersect(colnames(df1), colnames(prefecture_cityVar))
+df2  <- df1  %>%
   left_join(prefecture_cityVar, by = c("采购人省份" , "采购人城市","采购人省代码","采购人市代码","年份"))
 
 # 合并数据框：Step 3
-dupvar <- intersect(colnames(df1), colnames(county_cityVar))
+dupvar <- intersect(colnames(df2), colnames(county_cityVar))
 
-df2  <- df1  %>%
+df3  <- df2  %>%
   left_join(county_cityVar, by = dupvar)   
-#   left_join(county_cityVar, by = c("采购人省份" , "采购人城市","采购人区县", "采购人省代码","采购人市代码", "采购人县代码","年份"))   
-output_CountyEduGovProc_IT <- df2
+#   left_join(county_cityVar, by = c("采购人省份" , "采购人城市","采购人区县", "采购人省代码","采购人市代码", "采购人adcode","年份"))   
+output_CountyEduGovProc_IT <- df3
 
-
-
-
+# 查找并保留所有重复的 '采购人adcode' 和 '年份' 组合
+duplicates_all <- df3 %>%
+  group_by(采购人adcode, 年份) %>%
+  filter(n() > 1) %>%  # 只保留那些重复的组合
+  arrange(采购人adcode, 年份)  # 按 '采购人adcode' 和 '年份' 排序
 
 ```
 
