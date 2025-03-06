@@ -1,0 +1,424 @@
+---
+title: "连接 DuckDB 数据库并列出表"
+Author: "LiuSongyue"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+output_dir: "/Users/liusongyue/Library/CloudStorage/坚果云-201921030023@mail.bnu.edu.cn/1_StudySpace/一平/信息化建设、家庭教育与城乡儿童发展/LogFiles"
+---
+
+# 数据读取
+
+```{r }
+rm(list=ls())
+# 加载 DuckDB 库 
+library(DBI) 
+library(duckdb)
+
+# 请在此处设定你的根文件路径，后续路径无需修改
+root_path <- "~/Library/CloudStorage/坚果云-201921030023@mail.bnu.edu.cn/1_StudySpace/一平/信息化建设、家庭教育与城乡儿童发展"  
+
+
+
+# 设定数据库文件路径
+
+
+db_path <- file.path(root_path, "RawData", "教育信息化数据", "GovProc.duckdb")
+
+# 连接到数据库
+con <- dbConnect(duckdb::duckdb(), dbdir = db_path)
+
+# 获取数据库中的所有表
+EduGovProc_IT<-dbGetQuery(con, "SELECT * FROM EduGovProc_IT")
+
+dbDisconnect(con)
+```
+
+# 数据清理
+
+## 截尾
+
+在EduGovProc_IT\$合同金额num_万元基础上生成合同金额5%，95%截尾的变量：合同金额万元_T595
+
+```{r}
+
+library(dplyr)
+
+# 计算 5% 和 95% 分位数
+quantiles <- quantile(EduGovProc_IT$合同金额num_万元, probs = c(0.05, 0.95), na.rm = TRUE)
+lower_bound <- quantiles[1]
+upper_bound <- quantiles[2]
+
+# 生成 5%-95% 截尾变量
+EduGovProc_IT <- EduGovProc_IT %>%
+  mutate(合同金额万元_T595 = ifelse(合同金额num_万元 >= lower_bound & 合同金额num_万元 <= upper_bound, 合同金额num_万元, NA))
+
+# 查看结果
+summary(EduGovProc_IT$合同金额num_万元)
+summary(EduGovProc_IT$合同金额万元_T595)
+
+
+```
+
+## 基础教育标识变量
+
+根据EduInstType 的对应关系 生成基础教育阶段的样本的标识变量 ：BasicEduFlag
+
+(0, '教育行政管理机构'), (1, '学前教育'), (2, '小学教育'), (31, '普通中等教育'), (32, '职业中等教育'), (41, '普通高等教育'), (42, '职业高等教育'), (51, '特殊教育'), (61, '校外教育机构'), (71, '其他教育基地')
+
+基础教育包括包含 **学**前教育（1）、小学教育（2）和普通中等教育（31），不包括职业教育。
+
+```{r}
+library(dplyr)
+
+# 生成基础教育阶段的标识变量 (基础教育 = 1, 其他 = 0)
+EduGovProc_IT <- EduGovProc_IT %>%
+  mutate(BasicEduFlag = case_when(
+    EduInstType %in% c(1, 2, 31) ~ 1,  # 基础教育阶段
+    TRUE ~ 0  # 其他阶段
+  ))
+
+# 查看变量分布
+table(EduGovProc_IT$BasicEduFlag)
+
+
+```
+
+## 主要标的词云
+
+画出主要标的名称的词云
+
+```{r}
+# 加载必要的库
+library(tm)          # 文本处理
+library(wordcloud2)  # 绘制词云
+library(dplyr)       # 数据处理
+library(htmlwidgets)
+library(webshot2)
+# 提取主要标的名称
+# 仅筛选 BasicEdu_Flag = 1 的数据
+text_data <- EduGovProc_IT %>%
+  filter(BasicEduFlag == 1) %>%
+  pull(主要标的名称)
+
+# 定义停止词
+custom_stopwords <- c("详见合同", "详见附件")
+
+# 创建文本语料库，去除停止词
+corpus <- Corpus(VectorSource(text_data)) %>%
+  tm_map(content_transformer(tolower)) %>%   # 转换为小写
+  tm_map(removePunctuation) %>%              # 去除标点符号
+  tm_map(removeNumbers) %>%                  # 去除数字
+  tm_map(stripWhitespace) %>%                # 去除多余空格
+  tm_map(removeWords, custom_stopwords)      # 去除自定义停止词
+
+# 创建词频表
+# 创建词频矩阵（限制最大单词数）
+dtm <- TermDocumentMatrix(corpus, control = list(bounds = list(global = c(5, Inf)))) # 只保留至少出现 5 次的词
+
+matrix <- as.matrix(dtm)
+word_freqs <- sort(rowSums(matrix), decreasing = TRUE)
+df_wordcloud <- data.frame(word = names(word_freqs), freq = word_freqs)
+
+# 绘制词云
+temp_file <- file.path(root_path, "TempData")
+
+wordcloud_plot<-wordcloud2(df_wordcloud, size = 1, color = "random-light", backgroundColor = "white")
+temp_path <- file.path(temp_file, "temp_wordcloud.html")
+# 保存为 HTML（临时文件）
+saveWidget(wordcloud_plot, temp_path, selfcontained = TRUE)
+
+# 直接保存为 PNG
+fig_file <- file.path(root_path, "Figures")
+png_path <- file.path(fig_file, "Wordcloud for EduGovProc IT product in basic education.jpeg")
+webshot(temp_path, file = png_path, delay = 2, zoom = 3)
+
+
+```
+
+## 数据加总在区县X年份层面
+
+需要生成哪些变量：
+
+教育信息化采购区县（金额/合同数量）
+
+基础教育阶段教育信息化采购（BasicEduFlag=1）
+
+基础教育阶段硬件及网络基础设施采购（BasicEduFlag=1 & EduProcType =1）
+
+基础教育阶段软件及数据资源采购（BasicEduFlag=1 & EduProcType =2）
+
+基础教育阶段教师培训项目支出 （BasicEduFlag=1 & EduProcType =3）
+
+中等职业教育教育信息化采购 （EduInstType = 32）
+
+中等职业教育阶段硬件及网络基础设施采购
+
+中等职业教育阶段软件及数据资源采购
+
+中等职业教育阶段教师培训项目支出
+
+```{r}
+# 加载必要的库
+library(haven)
+library(dplyr)
+library(tidyr)
+
+# **Step 1: 检查缺失值**
+# 检查 "采购人省份", "采购人城市", "采购人区县", "采购人adcode" 的缺失值
+missing_values <- EduGovProc_IT %>%
+  summarise(
+    缺失_采购人省份 = sum(is.na(采购人省份)),
+    缺失_采购人城市 = sum(is.na(采购人城市)),
+    缺失_采购人区县 = sum(is.na(采购人区县)),
+    缺失_采购人adcode = sum(is.na(采购人adcode))
+  ) 
+print(missing_values)  # 显示缺失值情况
+
+
+# **Step 2:补充"采购人adcode" 为空的值**
+countyfile_path<- file.path(root_path, "RawData", "城市县域变量", "1999~2022年县市社会经济指标.dta")
+countyVar <- read_dta(countyfile_path)
+
+# 只保留省、市、县、县代码等中文变量
+county_namecodeMap <- countyVar %>%
+  rename(
+    采购人省份 = 省,
+    采购人城市 = 市,
+    采购人区县 = 县,
+    采购人县代码 = 县代码
+  )  %>%
+  select(采购人省份, 采购人城市, 采购人区县, 采购人县代码) %>%
+  filter(!is.na(采购人县代码))   %>%
+  distinct()  # 去除重复样本
+
+ EduGovProc_IT <-  EduGovProc_IT  %>%
+  left_join(county_namecodeMap, by=c("采购人省份", "采购人城市", "采购人区县"))
+# 替换 '采购人县代码' 为 'adcode' 当其为 NA 时
+ EduGovProc_IT   <- EduGovProc_IT   %>%
+  mutate(采购人adcode = if_else(is.na(采购人adcode), 采购人县代码, 采购人adcode))
+
+filtered_data <- EduGovProc_IT  %>%
+  filter(!is.na(采购人adcode))
+
+delete <- EduGovProc_IT  %>%
+  filter(is.na(采购人adcode)) %>%
+  select(采购人省份, 采购人城市, 采购人区县, 采购人县代码, 年份) %>%
+  distinct()  # 去除重复样本
+table(delete$年份)
+
+# **Step 3: 计算区县层面合同金额和合同数量**
+# 按区县（唯一标识：省份+城市+区县+adcode）加总 `合同金额万元_T595`
+CountyEduGovProc_IT_raw <- EduGovProc_IT 
+CountyEduGovProc_IT <- filtered_data %>%
+  group_by(采购人省份, 采购人城市, 采购人区县, 采购人adcode, 年份) %>%
+  summarise(
+    # **1. 教育信息化采购（全部金额/合同数）**
+    TotalEduITContract_Million = sum(合同金额万元_T595, na.rm = TRUE) / 100,
+    TotalEduITContract_Count = n(),
+    
+    # **2. 基础教育阶段教育信息化采购**
+    BasicEduITContract_Million = sum(合同金额万元_T595[BasicEduFlag == 1], na.rm = TRUE) / 100,
+    BasicEduITContract_Count = sum(BasicEduFlag == 1, na.rm = TRUE),
+    
+    # **3. 基础教育阶段硬件及网络基础设施采购**
+    BasicEdu_InfrastructureContract_Million = sum(合同金额万元_T595[BasicEduFlag == 1 & EduProcType == 1], na.rm = TRUE) / 100,
+    BasicEdu_InfrastructureContract_Count = sum(BasicEduFlag == 1 & EduProcType == 1, na.rm = TRUE),
+
+    # **4. 基础教育阶段软件及数据资源采购**
+    BasicEdu_DigitalResourcesContract_Million = sum(合同金额万元_T595[BasicEduFlag == 1 & EduProcType == 2], na.rm = TRUE) / 100,
+    BasicEdu_DigitalResourcesContract_Count = sum(BasicEduFlag == 1 & EduProcType == 2, na.rm = TRUE),
+
+    # **5. 基础教育阶段教师培训项目支出**
+    BasicEdu_TrainingContract_Million = sum(合同金额万元_T595[BasicEduFlag == 1 & EduProcType == 3], na.rm = TRUE) / 100,
+    BasicEdu_TrainingContract_Count = sum(BasicEduFlag == 1 & EduProcType == 3, na.rm = TRUE),
+
+    # **6. 中等职业教育教育信息化采购**
+    VocationalEduITContract_Million = sum(合同金额万元_T595[EduInstType == 32], na.rm = TRUE) / 100,
+    VocationalEduITContract_Count = sum(EduInstType == 32, na.rm = TRUE),
+
+    # **7. 中等职业教育阶段硬件及网络基础设施采购**
+    Vocational_InfrastructureContract_Million = sum(合同金额万元_T595[EduInstType == 32 & EduProcType == 1], na.rm = TRUE) / 100,
+    Vocational_InfrastructureContract_Count = sum(EduInstType == 32 & EduProcType == 1, na.rm = TRUE),
+
+    # **8. 中等职业教育阶段软件及数据资源采购**
+    Vocational_DigitalResourcesContract_Million = sum(合同金额万元_T595[EduInstType == 32 & EduProcType == 2], na.rm = TRUE) / 100,
+    Vocational_DigitalResourcesContract_Count = sum(EduInstType == 32 & EduProcType == 2, na.rm = TRUE),
+
+    # **9. 中等职业教育阶段教师培训项目支出**
+    Vocational_TrainingContract_Million = sum(合同金额万元_T595[EduInstType == 32 & EduProcType == 3], na.rm = TRUE) / 100,
+    Vocational_TrainingContract_Count = sum(EduInstType == 32 & EduProcType == 3, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+# **Step 4: 显示结果**
+print(CountyEduGovProc_IT)
+summary(CountyEduGovProc_IT)
+
+
+```
+
+## 匹配区县与城市变量
+
+```{r}
+library(haven)
+library(dplyr)
+library(tidyr)
+
+
+prefecturefile_path <- file.path(root_path, "RawData", "城市县域变量", "1998～2022年中国城市统计年鉴地级市面板数据.dta")
+
+countycityfile_path <- file.path(root_path, "RawData", "城市县域变量", "1999～2022年中国城市统计年鉴县级市面板数据.dta")
+
+countyfile_path<- file.path(root_path, "RawData", "城市县域变量", "1999~2022年县市社会经济指标.dta")
+
+
+prefecture_cityVar <- read_dta(prefecturefile_path)
+county_cityVar <- read_dta(countycityfile_path)
+countyVar <- read_dta(countyfile_path)
+
+
+# 预处理
+countyVar <- countyVar %>%
+  rename_with(~ paste0("cnty_", .)) %>%
+  rename(
+    年份 = cnty_年份,
+    采购人省份 = cnty_省,  # 省
+    采购人城市 = cnty_市,      # 市
+    采购人区县 = cnty_县,     # 县
+    采购人省代码 = cnty_省代码,
+    采购人市代码 = cnty_市代码,
+    采购人adcode = cnty_县代码
+  )
+
+prefecture_cityVar <-prefecture_cityVar %>%
+  rename_with(~ paste0("pref_", .)) %>%
+  rename(
+    年份 = pref_年份,
+    采购人省份 = pref_省,  # 省
+    采购人城市 = pref_市,      # 市
+    采购人省代码 = pref_省代码,
+    采购人市代码 = pref_市代码
+  )
+
+county_cityVar <- county_cityVar  %>%
+  rename_with(~ paste0("cnty_", .)) %>%
+  rename(
+    年份 = cnty_年份,
+    采购人省份 = cnty_省,  # 省
+    采购人城市 = cnty_市,      # 市
+    采购人区县 = cnty_县,     # 县
+    采购人省代码 = cnty_省代码,
+    采购人市代码 = cnty_市代码,
+    采购人adcode = cnty_县代码
+  )
+
+# 合并数据框：Step 1
+intersect(colnames(CountyEduGovProc_IT ), colnames(countyVar))
+
+df1 <- CountyEduGovProc_IT %>%
+  left_join(countyVar, by = c("采购人省份" , "采购人城市","采购人区县","采购人adcode","年份" ))  
+
+
+
+
+
+```
+
+```{r}
+
+
+# 合并数据框：Step 2
+intersect(colnames(df1), colnames(prefecture_cityVar))
+df2  <- df1  %>%
+  left_join(prefecture_cityVar, by = c("采购人省份" , "采购人城市","采购人省代码","采购人市代码","年份"))
+
+# 合并数据框：Step 3
+dupvar <- intersect(colnames(df2), colnames(county_cityVar))
+
+df3  <- df2  %>%
+  left_join(county_cityVar, by = dupvar)   
+#   left_join(county_cityVar, by = c("采购人省份" , "采购人城市","采购人区县", "采购人省代码","采购人市代码", "采购人adcode","年份"))   
+output_CountyEduGovProc_IT <- df3
+
+# 查找并保留所有重复的 '采购人adcode' 和 '年份' 组合
+duplicates_all <- df3 %>%
+  group_by(采购人adcode, 年份) %>%
+  filter(n() > 1) %>%  # 只保留那些重复的组合
+  arrange(采购人adcode, 年份)  # 按 '采购人adcode' 和 '年份' 排序
+
+```
+
+# 数据输出
+
+```{r}
+# 加载必要的库
+# install.packages("haven")  # 如果尚未安装
+library(haven)
+# 重新命名变量（确保符合 Stata 规则）
+attach(output_CountyEduGovProc_IT)
+output_CountyEduGovProc_IT <- output_CountyEduGovProc_IT %>%
+  rename(
+    TotalAmtMil = TotalEduITContract_Million,
+    TotalCnt = TotalEduITContract_Count,
+    BEAmtMil = BasicEduITContract_Million,
+    BECnt    = BasicEduITContract_Count,
+    BE_Infr_AmtMil = BasicEdu_InfrastructureContract_Million,
+    BE_Infr_Cnt = BasicEdu_InfrastructureContract_Count,
+    BE_DigRes_AmtMil = BasicEdu_DigitalResourcesContract_Million,
+    BE_DigRes_Cnt = BasicEdu_DigitalResourcesContract_Count,
+    BE_Train_AmtMil = BasicEdu_TrainingContract_Million,
+    BE_Train_Cnt = BasicEdu_TrainingContract_Count,
+    VocAmtMil = VocationalEduITContract_Million,
+    VocCnt = VocationalEduITContract_Count,
+    Voc_Infr_AmtMil = Vocational_InfrastructureContract_Million,
+    Voc_Infr_Cnt = Vocational_InfrastructureContract_Count,
+    Voc_DigRes_AmtMil = Vocational_DigitalResourcesContract_Million,
+    Voc_DigRes_Cnt = Vocational_DigitalResourcesContract_Count,
+    Voc_Train_AmtMil = Vocational_TrainingContract_Million,
+    Voc_Train_Cnt = Vocational_TrainingContract_Count,
+    pref_规模以上港澳台商投资企业工业总产值当年价万元全市 = pref_规模以上港澳台商投资企业工业总产值_当年价格_万元_全市,  #
+    pref_规模以上港澳台商投资企业工业总产值当年价万元市辖区 = pref_规模以上港澳台商投资企业工业总产值_当年价格_万元_市辖区, #
+    pref_二产电力热力燃气及水生产和供应业从业人员人全市 = pref_第二产业_电力热力燃气及水生产和供应业从业人员_人_全市, #
+    pref_二产电力热力燃气及水生产和供应业从业人员人市辖区 = pref_第二产业_电力热力燃气及水生产和供应业从业人员_人_市辖区, #
+    pref_规模以上工业企业产品销售收入万元市辖区 = pref_规模以上工业企业主要财务指标_产品销售收入_万元_市辖区, #
+    pref_规模以上工业企业固定资产净值年平均余额万元全市 = pref_规模以上工业企业资产状况_固定资产净值年平均余额_万元_全市,  #
+    pref_规模以上工业企业固定资产净值年平均余额万元市辖区 = pref_规模以上工业企业资产状况_固定资产净值年平均余额_万元_市辖区, #
+    pref_规模以上工业企业百元固定资产原价实现工业增加值元全市 = pref_规模以上工业企业百元固定资产原价实现工业增加值_元_全市,
+  pref_规模以上工业企业百元固定资产原价实现工业增加值元市辖区 = pref_规模以上工业企业百元固定资产原价实现工业增加值_元_市辖区
+  ) 
+
+# 为output_CountyEduGovProc_IT数据框中的变量添加标签
+output_CountyEduGovProc_IT$TotalAmtMil <- labelled(output_CountyEduGovProc_IT$TotalAmtMil, label = "教育信息化合同总金额（单位：百万元）（加总前样本经过5-95截尾）")
+output_CountyEduGovProc_IT$TotalCnt <- labelled(output_CountyEduGovProc_IT$TotalCnt, label = "教育信息化合同数量")
+output_CountyEduGovProc_IT$BEAmtMil <- labelled(output_CountyEduGovProc_IT$BEAmtMil, label = "基础教育阶段教育信息化合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$BECnt <- labelled(output_CountyEduGovProc_IT$BECnt, label = "基础教育阶段教育信息化合同数量")
+output_CountyEduGovProc_IT$BE_Infr_AmtMil <- labelled(output_CountyEduGovProc_IT$BE_Infr_AmtMil, label = "基础教育阶段硬件设备与网络建设教育信息化合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$BE_Infr_Cnt <- labelled(output_CountyEduGovProc_IT$BE_Infr_Cnt, label = "基础教育阶段硬件设备与网络建设教育信息化合同数量")
+output_CountyEduGovProc_IT$BE_DigRes_AmtMil <- labelled(output_CountyEduGovProc_IT$BE_DigRes_AmtMil, label = "基础教育阶段软件与数字资源采购合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$BE_DigRes_Cnt <- labelled(output_CountyEduGovProc_IT$BE_DigRes_Cnt, label = "基础教育阶段软件与数字资源采购合同数量")
+output_CountyEduGovProc_IT$BE_Train_AmtMil <- labelled(output_CountyEduGovProc_IT$BE_Train_AmtMil, label = "基础教育阶段教师培训项目支出合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$BE_Train_Cnt <- labelled(output_CountyEduGovProc_IT$BE_Train_Cnt, label = "基础教育阶段教师培训项目支出合同数量")
+output_CountyEduGovProc_IT$VocAmtMil <- labelled(output_CountyEduGovProc_IT$VocAmtMil, label = "中等职业教育阶段教育信息化合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$VocCnt <- labelled(output_CountyEduGovProc_IT$VocCnt, label = "中等职业教育阶段教育信息化合同数量")
+output_CountyEduGovProc_IT$Voc_Infr_AmtMil <- labelled(output_CountyEduGovProc_IT$Voc_Infr_AmtMil, label = "中等职业教育阶段硬件设备与网络建设教育信息化合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$Voc_Infr_Cnt <- labelled(output_CountyEduGovProc_IT$Voc_Infr_Cnt, label = "中等职业教育阶段硬件设备与网络建设教育信息化合同数量")
+output_CountyEduGovProc_IT$Voc_DigRes_AmtMil <- labelled(output_CountyEduGovProc_IT$Voc_DigRes_AmtMil, label = "中等职业教育阶段软件与数字资源采购合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$Voc_DigRes_Cnt <- labelled(output_CountyEduGovProc_IT$Voc_DigRes_Cnt, label = "中等职业教育阶段软件与数字资源采购合同数量")
+output_CountyEduGovProc_IT$Voc_Train_AmtMil <- labelled(output_CountyEduGovProc_IT$Voc_Train_AmtMil, label = "中等职业教育阶段教师培训项目支出合同总金额（单位：百万元）")
+output_CountyEduGovProc_IT$Voc_Train_Cnt <- labelled(output_CountyEduGovProc_IT$Voc_Train_Cnt, label = "中等职业教育阶段教师培训项目支出合同数量")
+
+
+detach(output_CountyEduGovProc_IT)
+# 指定保存路径
+dta_file_path <- file.path(root_path, "WorkingData", "CountyEduGovProc_IT.dta")
+
+# 保存为 Stata `.dta` 格式
+write_dta(output_CountyEduGovProc_IT, dta_file_path)
+
+# 确认文件是否正确保存
+print(paste("文件已保存至:", dta_file_path))
+
+```
